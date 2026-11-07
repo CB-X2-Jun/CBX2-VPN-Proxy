@@ -22,7 +22,7 @@ final appTheme = ThemeData(
     elevation: 0,
     centerTitle: false,
   ),
-  cardTheme: CardTheme(
+  cardTheme: CardThemeData(
     color: _surface,
     elevation: 0,
     shape: RoundedRectangleBorder(
