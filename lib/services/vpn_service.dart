@@ -12,16 +12,27 @@ class VpnService {
 
   Future<void> ensureService() async {
     if (_serviceInstalled) return;
-    await _singBox.installService(
-      serviceName: 'cbx2_vpn_service',
-      displayName: 'CBX2 VPN Service',
-      description: 'Core routing service for CBX2 VPN & Proxy',
-    );
-    _serviceInstalled = true;
+    try {
+      // 加上 10 秒超时，防止无限等待
+      await _singBox.installService(
+        serviceName: 'cbx2_vpn_service',
+        displayName: 'CBX2 VPN Service',
+        description: 'Core routing service for CBX2 VPN & Proxy',
+      ).timeout(const Duration(seconds: 10));
+      _serviceInstalled = true;
+    } catch (e) {
+      try {
+        File('cbx2_crash.log').writeAsStringSync(
+          'ensureService Error: $e\n',
+          mode: FileMode.append,
+        );
+      } catch (_) {}
+      rethrow; // 抛出异常，让 UI 能显示 "连接失败"
+    }
   }
 
   /// 把所有节点写成一个 Profile 并启动服务
-  Future<void> applyConfig(List<VpnNode> nodes, {bool useTun = true}) async {
+  Future<void> applyConfig(List<VpnNode> nodes, {bool useTun = false}) async {
     await ensureService();
 
     final configMap = _buildFullConfigMap(nodes, useTun: useTun);
