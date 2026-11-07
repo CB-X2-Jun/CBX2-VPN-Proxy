@@ -11,7 +11,7 @@ import 'dart:io';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   FlutterError.onError = (FlutterErrorDetails details) {
     try {
       File('cbx2_crash.log').writeAsStringSync(
@@ -26,7 +26,8 @@ void main() async {
     await FlutterSingBox().init();
   } catch (e) {
     try {
-      File('cbx2_crash.log').writeAsStringSync('CORE_INIT_FAILED: $e\n', mode: FileMode.append);
+      File('cbx2_crash.log').writeAsStringSync('CORE_INIT_FAILED: $e\n',
+          mode: FileMode.append);
     } catch (_) {}
   }
 
@@ -118,10 +119,10 @@ class _HomePageState extends State<HomePage> {
     setState(() => _loading = true);
     try {
       final nodes = await _api.fetchNodes();
-      
+
       // 提取所有国家，去重
       final countries = nodes.map((n) => n.countryName).toSet().toList();
-      
+
       setState(() {
         _allNodes = nodes;
         _availableCountries = ['全部', ...countries];
@@ -266,23 +267,31 @@ class _HomePageState extends State<HomePage> {
                               setState(() => _selectedCountry = country);
                               _filterAndSortNodes();
                             },
-                            selectedColor: Theme.of(context).colorScheme.primary.withOpacity(0.2),
-                            checkmarkColor: Theme.of(context).colorScheme.primary,
+                            selectedColor: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withOpacity(0.2),
+                            checkmarkColor:
+                                Theme.of(context).colorScheme.primary,
                           ),
                         );
                       },
                     ),
                   ),
-                
+
                 if (_exitInfo != null)
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
-                    color: _exitInfo!.contains('漂移') ? Colors.orange.shade50 : Colors.green.shade50,
+                    color: _exitInfo!.contains('漂移')
+                        ? Colors.orange.shade50
+                        : Colors.green.shade50,
                     child: Text(
                       _exitInfo!,
                       style: TextStyle(
-                        color: _exitInfo!.contains('漂移') ? Colors.orange.shade800 : Colors.green.shade800,
+                        color: _exitInfo!.contains('漂移')
+                            ? Colors.orange.shade800
+                            : Colors.green.shade800,
                       ),
                     ),
                   ),
@@ -294,7 +303,7 @@ class _HomePageState extends State<HomePage> {
                       final node = _displayNodes[i];
                       // 计算在当前列表中的序号（从1开始）
                       final displayIndex = i + 1;
-                      
+
                       return NodeTile(
                         node: node,
                         displayIndex: displayIndex,
@@ -330,4 +339,55 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// ... _BottomBar 保持原样 ...
+class _BottomBar extends StatelessWidget {
+  final String status;
+  final bool testing;
+  final bool connected;
+  final VoidCallback onTest;
+  final VoidCallback onDisconnect;
+  final int nodeCount;
+
+  const _BottomBar({
+    required this.status,
+    required this.testing,
+    required this.connected,
+    required this.onTest,
+    required this.onDisconnect,
+    required this.nodeCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: testing || nodeCount == 0 ? null : onTest,
+                icon: testing
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.speed),
+                label: Text(testing ? '测速中…' : '批量检测 ($nodeCount)'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (connected)
+              OutlinedButton(
+                onPressed: onDisconnect,
+                child: const Text('断开'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
