@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../models/node.dart';
 
 class NodeTile extends StatelessWidget {
   final VpnNode node;
+  final int displayIndex; // 传入计算好的序号
   final int? delayMs;
   final bool isConnected;
   final bool isSelectedForTest;
@@ -13,6 +15,7 @@ class NodeTile extends StatelessWidget {
   const NodeTile({
     super.key,
     required this.node,
+    required this.displayIndex,
     required this.delayMs,
     required this.isConnected,
     required this.isSelectedForTest,
@@ -51,8 +54,9 @@ class NodeTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // 显示国家 + 序号
                     Text(
-                      '${node.countryName} #${node.id.hashCode % 100}',
+                      '${node.countryName} #$displayIndex',
                       style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -63,8 +67,7 @@ class NodeTile extends StatelessWidget {
                         Text(
                           node.typeLabel,
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurface
-                                .withOpacity(0.55),
+                            color: theme.colorScheme.onSurface.withOpacity(0.55),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -90,8 +93,7 @@ class NodeTile extends StatelessWidget {
               _ProtoBadge(proto: node.proto),
               if (isConnected) ...[
                 const SizedBox(width: 6),
-                Icon(Icons.check_circle,
-                    size: 18, color: theme.colorScheme.primary),
+                Icon(Icons.check_circle, size: 18, color: theme.colorScheme.primary),
               ],
             ],
           ),
@@ -108,21 +110,18 @@ class _Flag extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final url =
-        'https://flags.etoj.run.place/flags/4x3/${iso.toLowerCase()}.svg';
+    final url = 'https://flags.etoj.run.place/flags/4x3/${iso.toLowerCase()}.svg';
     return ClipRRect(
       borderRadius: BorderRadius.circular(3),
-      child: Image.network(
+      child: SvgPicture.network(
         url,
         width: 28,
         height: 21,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => Container(
-          width: 28,
-          height: 21,
-          color: Colors.grey.shade200,
-          child: const Icon(Icons.public, size: 14, color: Colors.grey),
+        placeholderBuilder: (context) => Container(
+          width: 28, height: 21, color: Colors.grey.shade200,
         ),
+        // SVG 加载失败时的容错处理
       ),
     );
   }
