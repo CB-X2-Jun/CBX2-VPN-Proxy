@@ -6,11 +6,40 @@ import 'services/vpn_service.dart';
 import 'services/latency_service.dart';
 import 'theme.dart';
 import 'widgets/node_tile.dart';
+import 'dart:io'; // 必须引入
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await FlutterSingBox().init();
+
+  // 捕获 Flutter 框架内的错误并写入文件
+  FlutterError.onError = (FlutterErrorDetails details) {
+    try {
+      File('cbx2_crash.log').writeAsStringSync(
+        'FlutterError: ${details.exceptionAsString()}\n${details.stack}\n',
+        mode: FileMode.append,
+      );
+    } catch (_) {}
+  };
+
+  // 1. 先启动 UI 界面！
   runApp(const Cbx2App());
+
+  // 2. 在后台偷偷初始化，不让 UI 卡住
+  FlutterSingBox().init().then((_) {
+    try {
+      File('cbx2_crash.log').writeAsStringSync(
+        'SINGBOX_INIT_SUCCESS\n',
+        mode: FileMode.append,
+      );
+    } catch (_) {}
+  }).catchError((e) {
+    try {
+      File('cbx2_crash.log').writeAsStringSync(
+        'SINGBOX_INIT_FAILED: $e\n',
+        mode: FileMode.append,
+      );
+    } catch (_) {}
+  });
 }
 
 class Cbx2App extends StatelessWidget {
