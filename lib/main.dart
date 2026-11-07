@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_sing_box/flutter_sing_box.dart';
+import 'package:mmkv/mmkv.dart'; // 引入 MMKV
 import 'models/node.dart';
 import 'services/api_service.dart';
 import 'services/vpn_service.dart';
 import 'services/latency_service.dart';
 import 'theme.dart';
 import 'widgets/node_tile.dart';
-import 'dart:io'; // 必须引入
+import 'dart:io'; // 文件操作
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,25 +22,36 @@ void main() {
     } catch (_) {}
   };
 
-  // 1. 先启动 UI 界面！
+  // 1. 先启动 UI 界面，不让底层初始化卡住窗口显示！
   runApp(const Cbx2App());
 
-  // 2. 在后台偷偷初始化，不让 UI 卡住
-  FlutterSingBox().init().then((_) {
-    try {
-      File('cbx2_crash.log').writeAsStringSync(
-        'SINGBOX_INIT_SUCCESS\n',
-        mode: FileMode.append,
-      );
-    } catch (_) {}
-  }).catchError((e) {
-    try {
-      File('cbx2_crash.log').writeAsStringSync(
-        'SINGBOX_INIT_FAILED: $e\n',
-        mode: FileMode.append,
-      );
-    } catch (_) {}
-  });
+  // 2. 在后台偷偷初始化底层核心组件
+  _initializeCore();
+}
+
+/// 独立的核心初始化逻辑，包含 MMKV 和 sing-box 插件
+Future<void> _initializeCore() async {
+  try {
+    // 【关键修复】必须先初始化 MMKV 存储
+    final rootDir = await MMKV.initialize();
+    _writeLog('MMKV_INIT_SUCCESS: $rootDir');
+
+    // 然后再初始化 sing-box 插件
+    await FlutterSingBox().init();
+    _writeLog('SINGBOX_INIT_SUCCESS');
+  } catch (e, stack) {
+    _writeLog('CORE_INIT_FAILED: $e\n$stack');
+  }
+}
+
+/// 辅助函数：写入日志
+void _writeLog(String message) {
+  try {
+    File('cbx2_crash.log').writeAsStringSync(
+      '$message\n',
+      mode: FileMode.append,
+    );
+  } catch (_) {}
 }
 
 class Cbx2App extends StatelessWidget {
