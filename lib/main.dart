@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_sing_box/flutter_sing_box.dart';
-import 'package:provider/provider.dart';
 import 'models/node.dart';
 import 'services/api_service.dart';
 import 'services/vpn_service.dart';
@@ -38,6 +37,7 @@ class _HomePageState extends State<HomePage> {
   final _api = ApiService();
   final _vpn = VpnService();
   final _latency = LatencyService();
+  final _singBox = FlutterSingBox();
 
   List<VpnNode> _nodes = [];
   final Map<String, int?> _delays = {};
@@ -46,12 +46,55 @@ class _HomePageState extends State<HomePage> {
   String? _exitInfo;
   bool _loading = true;
   bool _testing = false;
+  bool _configApplied = false;
   final Set<String> _selectedForTest = {};
 
   @override
   void initState() {
     super.initState();
+    _singBox.groupStream.listen(_handleGroups);
     _loadNodes();
+  }
+
+  /// 订阅 sing-box 分组流，解析 urlTest 回传的延迟
+  void _handleGroups(dynamic groups) {
+    bool changed = false;
+    try {
+      for (final g in groups) {
+        final items = g.items;
+        if (items is! List) continue;
+        for (final item in items) {
+          final tag = item.tag;
+          final delay = item.delay;
+          if (tag is String && delay is int) {
+            VpnNode? node;
+            for (final n in _nodes) {
+              if (n.outbound['tag'] == tag) {
+                node = n;
+                break;
+              }
+            }
+            if (node != null && _delays[node.id] != delay) {
+              _delays[node.id] = delay;
+              changed = true;
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // 流结构不匹配时静默忽略，避免影响主流程
+    }
+    if (changed) {
+      _nodes.sort((a, b) {
+        final da = _delays[a.id];
+        final db = _delays[b.id];
+        if (da == null && db == null) return 0;
+        if (da == null) return 1;
+        if (db == null) return -1;
+        return da.compareTo(db);
+      });
+      if (mounted) setState(() {});
+    }
   }
 
   Future<void> _loadNodes() async {
@@ -73,52 +116,29 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// 首次操作时把全部节点写成一个 Profile 并启动服务
+  Future<void> _ensureConfig() async {
+    if (_configApplied) return;
+    await _vpn.applyConfig(_nodes);
+    _configApplied = true;
+  }
+
   Future<void> _batchTest() async {
     if (_nodes.isEmpty) return;
     setState(() {
       _testing = true;
       _delays.clear();
     });
-
-    // 把选中的节点注入一个临时配置并启动，以便 Clash API 能对它们测延迟
-    final selected = _nodes.where((n) => _selectedForTest.contains(n.id)).toList();
-    if (selected.isEmpty) {
-      setState(() => _testing = false);
-      return;
+    try {
+      await _ensureConfig();
+      await _vpn.startIfNeeded();
+      await _vpn.testAll();
+      // urlTest 结果通过 groupStream 异步推送，留出收集窗口
+      await Future.delayed(const Duration(seconds: 6));
+    } catch (e) {
+      if (mounted) setState(() => _status = '测速失败: $e');
     }
-
-    await _vpn.ensureService();
-
-    for (final node in selected) {
-      // 逐个节点启动并测延迟（最小可用实现；批量并发需额外处理端口冲突）
-      try {
-        await _vpn.connect(node);
-        // 稍等内核就绪
-        await Future.delayed(const Duration(milliseconds: 600));
-        final delay = await _latency.testDelay(node.outbound['tag'] as String);
-        _delays[node.id] = delay;
-        setState(() {});
-      } catch (_) {
-        _delays[node.id] = null;
-      }
-    }
-
-    await _vpn.disconnect();
-
-    // 按延迟升序排列，超时/失败的排在末尾
-    _nodes.sort((a, b) {
-      final da = _delays[a.id];
-      final db = _delays[b.id];
-      if (da == null && db == null) return 0;
-      if (da == null) return 1;
-      if (db == null) return -1;
-      return da.compareTo(db);
-    });
-
-    setState(() {
-      _testing = false;
-      _status = '测速完成';
-    });
+    if (mounted) setState(() => _testing = false);
   }
 
   Future<void> _connect(VpnNode node) async {
@@ -127,22 +147,27 @@ class _HomePageState extends State<HomePage> {
       _exitInfo = null;
     });
     try {
-      await _vpn.connect(node);
+      await _ensureConfig();
+      await _vpn.startIfNeeded();
+      await _vpn.selectNode(node);
+      await Future.delayed(const Duration(milliseconds: 800));
       final (ip, country) = await _latency.fetchExitInfo();
       final drift = country.isNotEmpty && country != node.country;
+      if (!mounted) return;
       setState(() {
         _connectedNode = node;
         _status = '已连接';
-        _exitInfo =
-            '出口 $ip ($country)${drift ? ' ⚠️ 国家漂移' : ''}';
+        _exitInfo = '出口 $ip ($country)${drift ? ' ⚠️ 国家漂移' : ''}';
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _status = '连接失败: $e');
     }
   }
 
   Future<void> _disconnect() async {
     await _vpn.disconnect();
+    if (!mounted) return;
     setState(() {
       _connectedNode = null;
       _status = '未连接';
@@ -192,8 +217,7 @@ class _HomePageState extends State<HomePage> {
                         node: node,
                         delayMs: _delays[node.id],
                         isConnected: _connectedNode?.id == node.id,
-                        isSelectedForTest:
-                            _selectedForTest.contains(node.id),
+                        isSelectedForTest: _selectedForTest.contains(node.id),
                         testing: _testing,
                         onTap: () => _connect(node),
                         onToggleTest: (v) {
@@ -260,9 +284,7 @@ class _BottomBar extends StatelessWidget {
                         ),
                       )
                     : const Icon(Icons.speed),
-                label: Text(
-                  testing ? '测速中…' : '批量检测 ($nodeCount)',
-                ),
+                label: Text(testing ? '测速中…' : '批量检测 ($nodeCount)'),
               ),
             ),
             const SizedBox(width: 8),
