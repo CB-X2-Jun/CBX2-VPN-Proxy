@@ -40,6 +40,20 @@ jobs:
       - name: Generate Windows platform files
         run: flutter create --platforms=windows .
 
+      - name: Patch flutter_window.cpp (ForceRedraw)
+        shell: pwsh
+        run: |
+          $file = "windows/runner/flutter_window.cpp"
+          $content = Get-Content $file -Raw
+          # 如果没有 ForceRedraw，我们就插在 Show() 之后
+          if ($content -notmatch "ForceRedraw") {
+            $content = $content -replace "this->Show\(\);", "this->Show();`r`n    flutter_controller_->ForceRedraw();"
+            Set-Content -Path $file -Value $content -Encoding UTF8
+            Write-Host "已成功打入 ForceRedraw 补丁"
+          } else {
+            Write-Host "已包含 ForceRedraw，跳过"
+          }
+
       - name: Build Windows release
         run: flutter build windows --release
 
