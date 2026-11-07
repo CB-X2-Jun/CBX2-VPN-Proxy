@@ -106,4 +106,18 @@ class VpnService {
       },
     };
   }
+
+  // 在 VpnService 类里追加
+  Future<void> startIfNeeded() async {
+    try {
+      final status = await _singBox.queryServiceStatus();
+      final running = (status as dynamic).running;
+      if (running != true) {
+        await _singBox.startVpn();
+      }
+    } catch (_) {
+      // 状态查询失败时兜底直接启动
+      await _singBox.startVpn();
+    }
+  }
 }
