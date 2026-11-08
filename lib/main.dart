@@ -62,14 +62,20 @@ class _HomePageState extends State<HomePage> {
   List<VpnNode> _allNodes = [];
   List<VpnNode> _displayNodes = [];
   List<String> _availableCountries = [];
-  String _selectedCountry = '全部';
+  
+  // 多选国家
+  Set<String> _selectedCountries = {};
 
   final Map<String, int?> _delays = {};
   VpnNode? _connectedNode;
   String _status = '未连接';
   String? _exitInfo;
   bool _loading = true;
-  bool _testing = false;
+  
+  // 状态控制
+  bool _useTun = false;
+  bool _isSelectingForTest = false; // 是否处于勾选模式
+  bool _testing = false;            // 是否正在测速
   bool _configApplied = false;
   bool _isSortedByDelay = false;
 
@@ -85,16 +91,13 @@ class _HomePageState extends State<HomePage> {
     setState(() => _loading = true);
     try {
       final nodes = await _api.fetchNodes();
-
       final countries = nodes.map((n) => n.countryName).toSet().toList();
 
       setState(() {
         _allNodes = nodes;
-        _availableCountries = ['全部', ...countries];
-        _selectedForTest
-          ..clear()
-          ..addAll(nodes.map((n) => n.id));
+        _availableCountries = countries;
         _loading = false;
+        _selectedCountries.clear(); // 初始为空，代表全部
       });
       _filterAndSortNodes();
     } catch (e) {
@@ -107,8 +110,9 @@ class _HomePageState extends State<HomePage> {
 
   void _filterAndSortNodes() {
     List<VpnNode> result = _allNodes.where((n) {
-      if (_selectedCountry == '全部') return true;
-      return n.countryName == _selectedCountry;
+      // 如果为空，说明选中了全部
+      if (_selectedCountries.isEmpty) return true;
+      return _selectedCountries.contains(n.countryName);
     }).toList();
 
     if (_isSortedByDelay) {
@@ -133,22 +137,62 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _ensureConfig() async {
     if (_configApplied) return;
-    await _vpn.applyConfigAndStart(_allNodes);
+    await _vpn.applyConfigAndStart(_allNodes, useTun: _useTun);
     _configApplied = true;
   }
 
-  Future<void> _batchTest() async {
-    if (_displayNodes.isEmpty) return;
+  // 进入勾选模式
+  void _enterSelectMode() {
     setState(() {
+      _isSelectingForTest = true;
+      _isSortedByDelay = false;
+      // 默认勾选当前页面显示的所有节点
+      _selectedForTest.clear();
+      _selectedForTest.addAll(_displayNodes.map((n) => n.id));
+    });
+  }
+
+  // 退出勾选模式
+  void _exitSelectMode() {
+    setState(() {
+      _isSelectingForTest = false;
+    });
+  }
+
+  // 全选/反选当前页
+  void _toggleSelectAllCurrent() {
+    setState(() {
+      final currentIds = _displayNodes.map((n) => n.id).toList();
+      final isAllSelected = currentIds.every((id) => _selectedForTest.contains(id));
+      if (isAllSelected) {
+        _selectedForTest.removeAll(currentIds);
+      } else {
+        _selectedForTest.addAll(currentIds);
+      }
+    });
+  }
+
+  // 真正开始测速
+  Future<void> _startBatchTest() async {
+    if (_selectedForTest.isEmpty) {
+      _exitSelectMode();
+      return;
+    }
+    
+    setState(() {
+      _isSelectingForTest = false;
       _testing = true;
       _delays.clear();
       _isSortedByDelay = false;
       _status = '正在启动核心并测速…';
     });
+
     try {
       await _ensureConfig();
       
+      // 从选中的节点中找出需要测速的
       final selectedNodes = _allNodes.where((n) => _selectedForTest.contains(n.id)).toList();
+      
       for (final node in selectedNodes) {
         final tag = node.outbound['tag'] as String;
         final delay = await _vpn.testDelay(tag);
@@ -171,13 +215,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _connect(VpnNode node) async {
+    if (_isSelectingForTest || _testing) return;
+
     setState(() {
       _status = '连接中…';
       _exitInfo = null;
     });
     try {
       await _ensureConfig();
-
       await _vpn.switchNode(node.outbound['tag'] as String);
       await Future.delayed(const Duration(milliseconds: 800));
       
@@ -202,6 +247,18 @@ class _HomePageState extends State<HomePage> {
       _connectedNode = null;
       _status = '未连接';
       _exitInfo = null;
+      _configApplied = false; // 断开后重置
+    });
+  }
+
+  void _toggleTunMode(bool value) {
+    if (_connectedNode != null) {
+      _disconnect();
+    }
+    setState(() {
+      _useTun = value;
+      _configApplied = false; 
+      _status = _useTun ? '已启用 TUN 模式' : '已启用系统代理模式';
     });
   }
 
@@ -211,9 +268,19 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('CBX2 VPN & Proxy'),
         actions: [
+          Row(
+            children: [
+              const Text('TUN模式', style: TextStyle(fontSize: 13)),
+              Switch(
+                value: _useTun,
+                activeColor: Theme.of(context).colorScheme.primary,
+                onChanged: _testing ? null : _toggleTunMode,
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _loadNodes,
+            onPressed: _loading || _testing || _isSelectingForTest ? null : _loadNodes,
           ),
         ],
       ),
@@ -221,35 +288,51 @@ class _HomePageState extends State<HomePage> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                if (!_testing && _availableCountries.length > 1)
+                // 国家多选筛选器
+                if (!_testing && !_isSelectingForTest)
                   Container(
                     height: 50,
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: ListView.builder(
+                    child: ListView(
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
-                      itemCount: _availableCountries.length,
-                      itemBuilder: (context, index) {
-                        final country = _availableCountries[index];
-                        final isSelected = _selectedCountry == country;
-                        return Padding(
+                      children: [
+                        Padding(
                           padding: const EdgeInsets.only(right: 8),
                           child: FilterChip(
-                            label: Text(country),
-                            selected: isSelected,
+                            label: const Text('全部'),
+                            selected: _selectedCountries.isEmpty,
                             onSelected: (val) {
-                              setState(() => _selectedCountry = country);
+                              setState(() => _selectedCountries.clear());
                               _filterAndSortNodes();
                             },
-                            selectedColor: Theme.of(context).colorScheme.primary.withOpacity(0.2),
-                            checkmarkColor: Theme.of(context).colorScheme.primary,
                           ),
-                        );
-                      },
+                        ),
+                        ..._availableCountries.map((country) {
+                          final isSelected = _selectedCountries.contains(country);
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: FilterChip(
+                              label: Text(country),
+                              selected: isSelected,
+                              onSelected: (val) {
+                                setState(() {
+                                  if (val) {
+                                    _selectedCountries.add(country);
+                                  } else {
+                                    _selectedCountries.remove(country);
+                                  }
+                                });
+                                _filterAndSortNodes();
+                              },
+                            ),
+                          );
+                        }),
+                      ],
                     ),
                   ),
 
-                if (_exitInfo != null)
+                if (_exitInfo != null && !_isSelectingForTest)
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
@@ -268,15 +351,14 @@ class _HomePageState extends State<HomePage> {
                     itemCount: _displayNodes.length,
                     itemBuilder: (_, i) {
                       final node = _displayNodes[i];
-                      final displayIndex = i + 1;
-
                       return NodeTile(
                         node: node,
-                        displayIndex: displayIndex,
+                        displayIndex: i + 1,
                         delayMs: _delays[node.id],
                         isConnected: _connectedNode?.id == node.id,
                         isSelectedForTest: _selectedForTest.contains(node.id),
                         testing: _testing,
+                        showCheckbox: _isSelectingForTest, // 新增参数
                         onTap: () => _connect(node),
                         onToggleTest: (v) {
                           setState(() {
@@ -292,87 +374,89 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
 
-                if (_status != '未连接')
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    color: _status.contains('失败') || _status.contains('警告') || _status.contains('不通')
-                        ? Colors.red.shade50 
-                        : Theme.of(context).colorScheme.primaryContainer,
-                    child: Text(
-                      _status,
-                      style: TextStyle(
-                        color: _status.contains('失败') || _status.contains('警告') || _status.contains('不通')
-                            ? Colors.red.shade800 
-                            : Theme.of(context).colorScheme.onPrimaryContainer,
-                        fontWeight: FontWeight.bold,
+                // 状态栏 + 端口显示
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  color: _status.contains('失败') || _status.contains('警告')
+                      ? Colors.red.shade50 
+                      : (_status == '未连接' ? Colors.grey.shade100 : Theme.of(context).colorScheme.primaryContainer),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _status,
+                        style: TextStyle(
+                          color: _status.contains('失败') || _status.contains('警告') ? Colors.red.shade800 : Colors.black87,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
+                      if (!_useTun && _status != '未连接')
+                        Text(
+                          'Mixed端口: 22890',
+                          style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12),
+                        ),
+                    ],
+                  ),
+                ),
+
+                // 底部操作栏
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        if (_isSelectingForTest) ...[
+                          // 选择模式下的按钮
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: _exitSelectMode,
+                              child: const Text('取消'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: ElevatedButton(
+                              onPressed: _toggleSelectAllCurrent,
+                              child: const Text('全选/反选 当前页'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: ElevatedButton(
+                              onPressed: _selectedForTest.isEmpty ? null : _startBatchTest,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                              ),
+                              child: Text('开始测速 (${_selectedForTest.length})'),
+                            ),
+                          ),
+                        ] else ...[
+                          // 普通模式下的按钮
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: _testing ? null : _enterSelectMode,
+                              icon: _testing
+                                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.speed),
+                              label: Text(_testing ? '测速中…' : '批量检测'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          if (_connectedNode != null)
+                            OutlinedButton(
+                              onPressed: _disconnect,
+                              child: const Text('断开'),
+                            ),
+                        ],
+                      ],
                     ),
                   ),
-
-                _BottomBar(
-                  status: _status,
-                  testing: _testing,
-                  connected: _connectedNode != null,
-                  onTest: _batchTest,
-                  onDisconnect: _disconnect,
-                  nodeCount: _selectedForTest.length,
                 ),
               ],
             ),
-    );
-  }
-}
-
-class _BottomBar extends StatelessWidget {
-  final String status;
-  final bool testing;
-  final bool connected;
-  final VoidCallback onTest;
-  final VoidCallback onDisconnect;
-  final int nodeCount;
-
-  const _BottomBar({
-    required this.status,
-    required this.testing,
-    required this.connected,
-    required this.onTest,
-    required this.onDisconnect,
-    required this.nodeCount,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: testing || nodeCount == 0 ? null : onTest,
-                icon: testing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.speed),
-                label: Text(testing ? '测速中…' : '批量检测 ($nodeCount)'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            if (connected)
-              OutlinedButton(
-                onPressed: onDisconnect,
-                child: const Text('断开'),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }
