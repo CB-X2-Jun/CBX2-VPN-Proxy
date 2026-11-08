@@ -59,6 +59,8 @@ class VpnService {
     );
 
     await ProfileStorage.instance.addProfile(profile, singBox);
+
+    await _singBox.startVpn(); 
   }
 
   Future<void> startIfNeeded() async {
