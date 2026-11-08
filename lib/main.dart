@@ -58,7 +58,6 @@ class _HomePageState extends State<HomePage> {
   final _api = ApiService();
   final _vpn = VpnService();
   final _latency = LatencyService();
-  final _singBox = FlutterSingBox();
 
   List<VpnNode> _allNodes = [];
   List<VpnNode> _displayNodes = [];
@@ -79,40 +78,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _singBox.groupStream.listen(_handleGroups);
     _loadNodes();
-  }
-
-  void _handleGroups(dynamic groups) {
-    bool changed = false;
-    try {
-      for (final g in groups) {
-        final items = g.items;
-        if (items is! List) continue;
-        for (final item in items) {
-          final tag = item.tag;
-          final delay = item.delay;
-          if (tag is String && delay is int) {
-            VpnNode? node;
-            for (final n in _allNodes) {
-              if (n.outbound['tag'] == tag) {
-                node = n;
-                break;
-              }
-            }
-            if (node != null && _delays[node.id] != delay) {
-              _delays[node.id] = delay;
-              changed = true;
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    if (changed) {
-      if (mounted) setState(() => _isSortedByDelay = true);
-      _filterAndSortNodes();
-    }
   }
 
   Future<void> _loadNodes() async {
@@ -183,19 +149,31 @@ class _HomePageState extends State<HomePage> {
       await _ensureConfig();
       await _vpn.startIfNeeded();
       
-      // 给核心一点时间启动
-      await Future.delayed(const Duration(seconds: 1));
-      await _vpn.testAll();
+      // 等待内核完全启动并监听 9090 端口
+      await Future.delayed(const Duration(seconds: 2));
+
+      final selectedNodes = _allNodes.where((n) => _selectedForTest.contains(n.id)).toList();
       
-      await Future.delayed(const Duration(seconds: 6));
-      if (mounted) setState(() => _status = '测速完成');
+      // 串行请求测速（安全稳定，不会冲垮 API）
+      for (final node in selectedNodes) {
+        final tag = node.outbound['tag'] as String;
+        final delay = await _vpn.testDelay(tag);
+        if (mounted) {
+          setState(() {
+            _delays[node.id] = delay ?? 9999; // 9999表示超时
+          });
+        }
+      }
+
+      setState(() {
+        _isSortedByDelay = true;
+        _status = '测速完成';
+      });
+      _filterAndSortNodes();
     } catch (e) {
       if (mounted) setState(() => _status = '测速失败: $e');
     }
-    if (mounted) {
-      setState(() => _testing = false);
-      _filterAndSortNodes();
-    }
+    if (mounted) setState(() => _testing = false);
   }
 
   Future<void> _connect(VpnNode node) async {
@@ -206,10 +184,11 @@ class _HomePageState extends State<HomePage> {
     try {
       await _ensureConfig();
       await _vpn.startIfNeeded();
-      await _vpn.selectNode(node);
-      
-      // 等待路由生效
-      await Future.delayed(const Duration(milliseconds: 1000));
+      await Future.delayed(const Duration(seconds: 1));
+
+      // 直接通过 HTTP 请求切换节点
+      await _vpn.switchNode(node.outbound['tag'] as String);
+      await Future.delayed(const Duration(milliseconds: 800));
       
       final (ip, country) = await _latency.fetchExitInfo();
       final drift = country.isNotEmpty && country != node.country;
