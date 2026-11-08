@@ -13,14 +13,22 @@ class VpnService {
     final configString = const JsonEncoder.withIndent('  ').convert(configMap);
 
     final exePath = Platform.resolvedExecutable;
-    final exeDir = File(exePath).parent.path;
+    // 【修复】统一替换为正斜杠，防止路径拼接出问题
+    final exeDir = File(exePath).parent.path.replaceAll('\\', '/');
     
     final configFile = File('$exeDir/generated_config.json');
     await configFile.writeAsString(configString);
 
-    final singBoxExePath = '$exeDir/data/flutter_assets/packages/flutter_sing_box/assets/windows/amd64/sing_box.exe';
-    if (!File(singBoxExePath).existsSync()) {
-      throw Exception('找不到内核文件: $singBoxExePath');
+    final amd64Dir = '$exeDir/data/flutter_assets/packages/flutter_sing_box/assets/windows/amd64';
+    
+    // 【修复】尝试两种可能的文件名
+    File targetExe = File('$amd64Dir/sing-box.exe');
+    if (!targetExe.existsSync()) {
+      targetExe = File('$amd64Dir/sing_box.exe');
+    }
+    
+    if (!targetExe.existsSync()) {
+      throw Exception('找不到内核文件，请确认路径是否正确: $amd64Dir');
     }
 
     if (_singBoxProcess != null) {
@@ -29,8 +37,9 @@ class VpnService {
       await Future.delayed(const Duration(milliseconds: 500));
     }
 
+    debugPrint('正在启动 sing-box: ${targetExe.path}');
     _singBoxProcess = await Process.start(
-      singBoxExePath,
+      targetExe.path, // 使用找到的路径
       ['run', '-c', configFile.path],
       workingDirectory: exeDir,
       mode: ProcessStartMode.detached,
@@ -41,13 +50,13 @@ class VpnService {
       try {
         await http.get(Uri.parse('http://127.0.0.1:29090')).timeout(const Duration(seconds: 1));
         debugPrint('sing-box 启动成功，29090 端口已就绪');
-        break;
+        break; 
       } catch (_) {
         if (i == 9) throw Exception('sing-box 启动超时，端口 29090 无法连接');
       }
     }
   }
-
+  
   Future<void> stop() async {
     if (_singBoxProcess != null) {
       _singBoxProcess!.kill();
