@@ -78,13 +78,18 @@ class VpnService {
   Map<String, dynamic> _buildFullConfigMap(List<VpnNode> nodes, {required bool useTun}) {
     final inbound = useTun
         ? {
-            'type': 'tun', 'tag': 'tun-in',
+            'type': 'tun',
+            'tag': 'tun-in',
             'address': ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
-            'auto_route': true, 'strict_route': true, 'stack': 'mixed',
+            'auto_route': true,
+            'strict_route': true,
+            'stack': 'mixed',
           }
         : {
-            'type': 'mixed', 'tag': 'mixed-in',
-            'listen': '127.0.0.1', 'listen_port': 8890,
+            'type': 'mixed',
+            'tag': 'mixed-in',
+            'listen': '127.0.0.1',
+            'listen_port': 8890,
           };
 
     final outbounds = nodes.map((n) => n.outbound).toList();
@@ -97,11 +102,31 @@ class VpnService {
 
     return {
       'log': {'level': 'info'},
+      // --- 修复点 1：使用 sing-box 1.14+ 的新版 DNS 格式 ---
       'dns': {
         'servers': [
-          {'tag': 'dns-direct', 'address': '223.5.5.5', 'detour': 'direct'}
+          {
+            'tag': 'dns-direct',
+            'type': 'udp',
+            'server': '223.5.5.5',
+            'detour': 'direct', // 确保这个 DNS 走直连
+          },
+          {
+            'tag': 'dns-remote',
+            'type': 'https',
+            'server': '1.1.1.1',
+            'detour': _groupTag, // 远端 DNS 走代理
+          }
         ],
-        'final': 'dns-direct',
+        'rules': [
+          {
+            // 代理节点的域名解析，必须走直连 DNS，否则会死锁（节点还没连上，没法用节点查 DNS）
+            'outbound': 'any',
+            'server': 'dns-direct',
+          }
+        ],
+        'final': 'dns-remote', // 默认使用远端 DNS 解析网页
+        'strategy': 'prefer_ipv4',
       },
       'inbounds': [inbound],
       'outbounds': [
@@ -111,9 +136,14 @@ class VpnService {
       'route': {
         'auto_detect_interface': true,
         'final': _groupTag,
+        'default_domain_resolver': 'dns-direct', // 路由级 DNS 兜底
       },
       'experimental': {
-        'clash_api': {'external_controller': '127.0.0.1:9090'},
+        // 开启 Clash API 用于测速
+        'clash_api': {
+          'external_controller': '127.0.0.1:9090',
+          'default_mode': 'rule',
+        },
       },
     };
   }
