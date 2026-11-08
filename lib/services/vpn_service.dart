@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter_sing_box/flutter_sing_box.dart';
 import '../models/node.dart';
 
@@ -31,17 +32,15 @@ class VpnService {
   Future<void> applyConfig(List<VpnNode> nodes, {bool useTun = false}) async {
     await ensureService();
 
-    // 1. 构建完整配置
     final configMap = _buildFullConfigMap(nodes, useTun: useTun);
 
-    // 2. 把生成的 JSON 存到当前目录（exe 旁边），方便你查看排错
+    // 保存到本地方便排错
     try {
       await File('generated_config.json').writeAsString(
         const JsonEncoder.withIndent('  ').convert(configMap)
       );
     } catch (_) {}
 
-    // 3. 转换为 SingBox 对象并存入 Profile
     final singBox = SingBox.fromJson(configMap);
     final profileId = ProfileStorage.instance.generateProfileId;
     final configPath = await ProfileStorage.instance.getProfilePath(profileId);
@@ -59,8 +58,7 @@ class VpnService {
     );
 
     await ProfileStorage.instance.addProfile(profile, singBox);
-
-    await _singBox.startVpn(); 
+    await _singBox.startVpn();
   }
 
   Future<void> startIfNeeded() async {
@@ -75,15 +73,30 @@ class VpnService {
     }
   }
 
-  Future<void> selectNode(VpnNode node) async {
-    await _singBox.selectOutbound(
-      groupTag: _groupTag,
-      outboundTag: node.outbound['tag'] as String,
+  // ======= 手搓 HTTP 通信，绕开插件 Bug =======
+
+  /// 通过请求 Clash API 切换当前分组下的节点
+  Future<void> switchNode(String tag) async {
+    final url = Uri.parse('http://127.0.0.1:9090/proxies/$_groupTag');
+    await http.put(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'name': tag}),
     );
   }
 
-  Future<void> testAll() async {
-    await _singBox.urlTest(groupTag: _groupTag);
+  /// 通过请求 Clash API 获取单个节点的真实延迟
+  Future<int?> testDelay(String tag) async {
+    try {
+      final url = Uri.parse(
+          'http://127.0.0.1:9090/proxies/${Uri.encodeComponent(tag)}/delay?timeout=5000&url=${Uri.encodeComponent('https://www.gstatic.com/generate_204')}');
+      final res = await http.get(url).timeout(const Duration(seconds: 6));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        return data['delay'] as int?;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> disconnect() async {
@@ -91,7 +104,6 @@ class VpnService {
   }
 
   Map<String, dynamic> _buildFullConfigMap(List<VpnNode> nodes, {required bool useTun}) {
-    // 强制使用 Mixed 模式，监听 0.0.0.0 方便本机任何客户端连接
     final inbound = {
       'type': 'mixed',
       'tag': 'mixed-in',
@@ -107,13 +119,9 @@ class VpnService {
       'default': nodes.first.outbound['tag'],
     });
 
-    // 日志输出路径，用 Windows 标准的正斜杠
-    final logPath = '${Directory.systemTemp.path}/sing-box.log'.replaceAll('\\', '/');
-
     return {
       'log': {
-        'level': 'debug',
-        'output': logPath,
+        'level': 'info',
         'timestamp': true,
       },
       'dns': {
