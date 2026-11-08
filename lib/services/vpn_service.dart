@@ -1,9 +1,7 @@
+import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_sing_box/flutter_sing_box.dart';
 import '../models/node.dart';
-
-import 'package:flutter_sing_box/flutter_sing_box.dart';
-import 'dart:io';
 
 class VpnService {
   final _singBox = FlutterSingBox();
@@ -13,7 +11,6 @@ class VpnService {
   Future<void> ensureService() async {
     if (_serviceInstalled) return;
     try {
-      // 加上 10 秒超时，防止无限等待
       await _singBox.installService(
         serviceName: 'cbx2_vpn_service',
         displayName: 'CBX2 VPN Service',
@@ -27,17 +24,25 @@ class VpnService {
           mode: FileMode.append,
         );
       } catch (_) {}
-      rethrow; // 抛出异常，让 UI 能显示 "连接失败"
+      rethrow;
     }
   }
 
-  /// 把所有节点写成一个 Profile 并启动服务
   Future<void> applyConfig(List<VpnNode> nodes, {bool useTun = false}) async {
     await ensureService();
 
+    // 1. 构建完整配置
     final configMap = _buildFullConfigMap(nodes, useTun: useTun);
-    final singBox = SingBox.fromJson(configMap);
 
+    // 2. 把生成的 JSON 存到当前目录（exe 旁边），方便你查看排错
+    try {
+      await File('generated_config.json').writeAsString(
+        const JsonEncoder.withIndent('  ').convert(configMap)
+      );
+    } catch (_) {}
+
+    // 3. 转换为 SingBox 对象并存入 Profile
+    final singBox = SingBox.fromJson(configMap);
     final profileId = ProfileStorage.instance.generateProfileId;
     final configPath = await ProfileStorage.instance.getProfilePath(profileId);
 
@@ -47,17 +52,27 @@ class VpnService {
       name: 'CBX2 Nodes',
       outboundsCount: nodes.length,
       typed: TypedProfile(
-        type: ProfileType.local, // 需确认枚举值，见下方说明
+        type: ProfileType.local, 
         path: configPath,
         lastUpdated: DateTime.now().millisecondsSinceEpoch,
       ),
     );
 
     await ProfileStorage.instance.addProfile(profile, singBox);
-    await _singBox.startVpn(); // 此时当前选中 Profile 已是这份配置
   }
 
-  /// 切换节点（服务不重启）
+  Future<void> startIfNeeded() async {
+    try {
+      final status = await _singBox.queryServiceStatus();
+      final running = (status as dynamic).running;
+      if (running != true) {
+        await _singBox.startVpn();
+      }
+    } catch (_) {
+      await _singBox.startVpn();
+    }
+  }
+
   Future<void> selectNode(VpnNode node) async {
     await _singBox.selectOutbound(
       groupTag: _groupTag,
@@ -65,7 +80,6 @@ class VpnService {
     );
   }
 
-  /// 批量 URL 测速
   Future<void> testAll() async {
     await _singBox.urlTest(groupTag: _groupTag);
   }
@@ -74,23 +88,14 @@ class VpnService {
     await _singBox.stopVpn();
   }
 
-  /// 构建完整 sing-box 配置 Map（含 selector 分组）
   Map<String, dynamic> _buildFullConfigMap(List<VpnNode> nodes, {required bool useTun}) {
-    final inbound = useTun
-        ? {
-            'type': 'tun',
-            'tag': 'tun-in',
-            'address': ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
-            'auto_route': true,
-            'strict_route': true,
-            'stack': 'mixed',
-          }
-        : {
-            'type': 'mixed',
-            'tag': 'mixed-in',
-            'listen': '127.0.0.1',
-            'listen_port': 8890,
-          };
+    // 强制使用 Mixed 模式，监听 0.0.0.0 方便本机任何客户端连接
+    final inbound = {
+      'type': 'mixed',
+      'tag': 'mixed-in',
+      'listen': '0.0.0.0',
+      'listen_port': 8890,
+    };
 
     final outbounds = nodes.map((n) => n.outbound).toList();
     outbounds.add({
@@ -100,32 +105,37 @@ class VpnService {
       'default': nodes.first.outbound['tag'],
     });
 
+    // 日志输出路径，用 Windows 标准的正斜杠
+    final logPath = '${Directory.systemTemp.path}/sing-box.log'.replaceAll('\\', '/');
+
     return {
-      'log': {'level': 'info'},
-      // --- 修复点 1：使用 sing-box 1.14+ 的新版 DNS 格式 ---
+      'log': {
+        'level': 'debug',
+        'output': logPath,
+        'timestamp': true,
+      },
       'dns': {
         'servers': [
           {
             'tag': 'dns-direct',
             'type': 'udp',
             'server': '223.5.5.5',
-            'detour': 'direct', // 确保这个 DNS 走直连
+            'detour': 'direct',
           },
           {
             'tag': 'dns-remote',
             'type': 'https',
             'server': '1.1.1.1',
-            'detour': _groupTag, // 远端 DNS 走代理
+            'detour': _groupTag,
           }
         ],
         'rules': [
           {
-            // 代理节点的域名解析，必须走直连 DNS，否则会死锁（节点还没连上，没法用节点查 DNS）
             'outbound': 'any',
             'server': 'dns-direct',
           }
         ],
-        'final': 'dns-remote', // 默认使用远端 DNS 解析网页
+        'final': 'dns-remote',
         'strategy': 'prefer_ipv4',
       },
       'inbounds': [inbound],
@@ -136,29 +146,14 @@ class VpnService {
       'route': {
         'auto_detect_interface': true,
         'final': _groupTag,
-        'default_domain_resolver': 'dns-direct', // 路由级 DNS 兜底
+        'default_domain_resolver': 'dns-direct',
       },
       'experimental': {
-        // 开启 Clash API 用于测速
         'clash_api': {
-          'external_controller': '127.0.0.1:9090',
+          'external_controller': '0.0.0.0:9090',
           'default_mode': 'rule',
         },
       },
     };
-  }
-
-  // 在 VpnService 类里追加
-  Future<void> startIfNeeded() async {
-    try {
-      final status = await _singBox.queryServiceStatus();
-      final running = (status as dynamic).running;
-      if (running != true) {
-        await _singBox.startVpn();
-      }
-    } catch (_) {
-      // 状态查询失败时兜底直接启动
-      await _singBox.startVpn();
-    }
   }
 }
