@@ -133,7 +133,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _ensureConfig() async {
     if (_configApplied) return;
-    await _vpn.applyConfig(_allNodes);
+    await _vpn.applyConfigAndStart(_allNodes);
     _configApplied = true;
   }
 
@@ -147,20 +147,14 @@ class _HomePageState extends State<HomePage> {
     });
     try {
       await _ensureConfig();
-      await _vpn.startIfNeeded();
       
-      // 等待内核完全启动并监听 9090 端口
-      await Future.delayed(const Duration(seconds: 2));
-
       final selectedNodes = _allNodes.where((n) => _selectedForTest.contains(n.id)).toList();
-      
-      // 串行请求测速（安全稳定，不会冲垮 API）
       for (final node in selectedNodes) {
         final tag = node.outbound['tag'] as String;
         final delay = await _vpn.testDelay(tag);
         if (mounted) {
           setState(() {
-            _delays[node.id] = delay ?? 9999; // 9999表示超时
+            _delays[node.id] = delay ?? 9999;
           });
         }
       }
@@ -183,10 +177,7 @@ class _HomePageState extends State<HomePage> {
     });
     try {
       await _ensureConfig();
-      await _vpn.startIfNeeded();
-      await Future.delayed(const Duration(seconds: 1));
 
-      // 直接通过 HTTP 请求切换节点
       await _vpn.switchNode(node.outbound['tag'] as String);
       await Future.delayed(const Duration(milliseconds: 800));
       
@@ -205,7 +196,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _disconnect() async {
-    await _vpn.disconnect();
+    await _vpn.stop();
     if (!mounted) return;
     setState(() {
       _connectedNode = null;
@@ -301,16 +292,19 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
 
-                // 显示状态文本（红/蓝底色）
                 if (_status != '未连接')
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    color: _status.contains('失败') ? Colors.red.shade50 : Theme.of(context).colorScheme.primaryContainer,
+                    color: _status.contains('失败') || _status.contains('警告') || _status.contains('不通')
+                        ? Colors.red.shade50 
+                        : Theme.of(context).colorScheme.primaryContainer,
                     child: Text(
                       _status,
                       style: TextStyle(
-                        color: _status.contains('失败') ? Colors.red.shade800 : Theme.of(context).colorScheme.onPrimaryContainer,
+                        color: _status.contains('失败') || _status.contains('警告') || _status.contains('不通')
+                            ? Colors.red.shade800 
+                            : Theme.of(context).colorScheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
