@@ -60,10 +60,10 @@ class _HomePageState extends State<HomePage> {
   final _latency = LatencyService();
   final _singBox = FlutterSingBox();
 
-  List<VpnNode> _allNodes = []; // 原始节点池
-  List<VpnNode> _displayNodes = []; // 当前要显示的节点
-  List<String> _availableCountries = []; // 筛选器列表
-  String _selectedCountry = '全部'; // 当前选中的国家
+  List<VpnNode> _allNodes = [];
+  List<VpnNode> _displayNodes = [];
+  List<String> _availableCountries = [];
+  String _selectedCountry = '全部';
 
   final Map<String, int?> _delays = {};
   VpnNode? _connectedNode;
@@ -72,7 +72,7 @@ class _HomePageState extends State<HomePage> {
   bool _loading = true;
   bool _testing = false;
   bool _configApplied = false;
-  bool _isSortedByDelay = false; // 记录是否已经按延迟排序
+  bool _isSortedByDelay = false;
 
   final Set<String> _selectedForTest = {};
 
@@ -110,7 +110,7 @@ class _HomePageState extends State<HomePage> {
     } catch (_) {}
 
     if (changed) {
-      if (mounted) setState(() => _isSortedByDelay = true); // 接收到延迟，触发排序
+      if (mounted) setState(() => _isSortedByDelay = true);
       _filterAndSortNodes();
     }
   }
@@ -120,7 +120,6 @@ class _HomePageState extends State<HomePage> {
     try {
       final nodes = await _api.fetchNodes();
 
-      // 提取所有国家，去重
       final countries = nodes.map((n) => n.countryName).toSet().toList();
 
       setState(() {
@@ -140,7 +139,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// 核心逻辑：根据选中的国家过滤，并根据当前状态（测速前/后）排序
   void _filterAndSortNodes() {
     List<VpnNode> result = _allNodes.where((n) {
       if (_selectedCountry == '全部') return true;
@@ -148,7 +146,6 @@ class _HomePageState extends State<HomePage> {
     }).toList();
 
     if (_isSortedByDelay) {
-      // 如果已经测速，按延迟从低到高排（没测出延迟的排在最后）
       result.sort((a, b) {
         final da = _delays[a.id];
         final db = _delays[b.id];
@@ -158,7 +155,6 @@ class _HomePageState extends State<HomePage> {
         return da.compareTo(db);
       });
     } else {
-      // 如果没测速，按国家分组排在一起，同国家保持原顺序
       result.sort((a, b) {
         final cmp = a.countryName.compareTo(b.countryName);
         if (cmp != 0) return cmp;
@@ -180,13 +176,19 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _testing = true;
       _delays.clear();
-      _isSortedByDelay = false; // 测速期间先恢复默认排序
+      _isSortedByDelay = false;
+      _status = '正在启动核心并测速…';
     });
     try {
       await _ensureConfig();
       await _vpn.startIfNeeded();
+      
+      // 给核心一点时间启动
+      await Future.delayed(const Duration(seconds: 1));
       await _vpn.testAll();
+      
       await Future.delayed(const Duration(seconds: 6));
+      if (mounted) setState(() => _status = '测速完成');
     } catch (e) {
       if (mounted) setState(() => _status = '测速失败: $e');
     }
@@ -205,7 +207,10 @@ class _HomePageState extends State<HomePage> {
       await _ensureConfig();
       await _vpn.startIfNeeded();
       await _vpn.selectNode(node);
-      await Future.delayed(const Duration(milliseconds: 800));
+      
+      // 等待路由生效
+      await Future.delayed(const Duration(milliseconds: 1000));
+      
       final (ip, country) = await _latency.fetchExitInfo();
       final drift = country.isNotEmpty && country != node.country;
       if (!mounted) return;
@@ -246,7 +251,6 @@ class _HomePageState extends State<HomePage> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // 横向滑动的国家筛选器
                 if (!_testing && _availableCountries.length > 1)
                   Container(
                     height: 50,
@@ -267,12 +271,8 @@ class _HomePageState extends State<HomePage> {
                               setState(() => _selectedCountry = country);
                               _filterAndSortNodes();
                             },
-                            selectedColor: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withOpacity(0.2),
-                            checkmarkColor:
-                                Theme.of(context).colorScheme.primary,
+                            selectedColor: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                            checkmarkColor: Theme.of(context).colorScheme.primary,
                           ),
                         );
                       },
@@ -283,25 +283,21 @@ class _HomePageState extends State<HomePage> {
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
-                    color: _exitInfo!.contains('漂移')
-                        ? Colors.orange.shade50
-                        : Colors.green.shade50,
+                    color: _exitInfo!.contains('漂移') ? Colors.orange.shade50 : Colors.green.shade50,
                     child: Text(
                       _exitInfo!,
                       style: TextStyle(
-                        color: _exitInfo!.contains('漂移')
-                            ? Colors.orange.shade800
-                            : Colors.green.shade800,
+                        color: _exitInfo!.contains('漂移') ? Colors.orange.shade800 : Colors.green.shade800,
                       ),
                     ),
                   ),
+                  
                 Expanded(
                   child: ListView.builder(
                     padding: const EdgeInsets.all(12),
                     itemCount: _displayNodes.length,
                     itemBuilder: (_, i) {
                       final node = _displayNodes[i];
-                      // 计算在当前列表中的序号（从1开始）
                       final displayIndex = i + 1;
 
                       return NodeTile(
@@ -325,6 +321,22 @@ class _HomePageState extends State<HomePage> {
                     },
                   ),
                 ),
+
+                // 显示状态文本（红/蓝底色）
+                if (_status != '未连接')
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    color: _status.contains('失败') ? Colors.red.shade50 : Theme.of(context).colorScheme.primaryContainer,
+                    child: Text(
+                      _status,
+                      style: TextStyle(
+                        color: _status.contains('失败') ? Colors.red.shade800 : Theme.of(context).colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+
                 _BottomBar(
                   status: _status,
                   testing: _testing,
