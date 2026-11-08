@@ -122,19 +122,12 @@ class VpnService {
             'tag': 'dns-direct',
             'type': 'udp',
             'server': '223.5.5.5',
-            'detour': 'direct',
           },
           {
             'tag': 'dns-remote',
             'type': 'https',
             'server': '1.1.1.1',
             'detour': _groupTag,
-          }
-        ],
-        'rules': [
-          {
-            'outbound': 'any',
-            'server': 'dns-direct',
           }
         ],
         'final': 'dns-remote',
