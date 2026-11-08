@@ -4,11 +4,12 @@ import '../models/node.dart';
 
 class NodeTile extends StatelessWidget {
   final VpnNode node;
-  final int displayIndex; // 传入计算好的序号
+  final int displayIndex;
   final int? delayMs;
   final bool isConnected;
   final bool isSelectedForTest;
   final bool testing;
+  final bool showCheckbox; // 新增：是否展示勾选框
   final VoidCallback onTap;
   final ValueChanged<bool> onToggleTest;
 
@@ -20,6 +21,7 @@ class NodeTile extends StatelessWidget {
     required this.isConnected,
     required this.isSelectedForTest,
     required this.testing,
+    required this.showCheckbox,
     required this.onTap,
     required this.onToggleTest,
   });
@@ -42,7 +44,7 @@ class NodeTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              if (testing)
+              if (showCheckbox)
                 Checkbox(
                   value: isSelectedForTest,
                   onChanged: (v) => onToggleTest(v ?? false),
@@ -54,7 +56,6 @@ class NodeTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 显示国家 + 序号
                     Text(
                       '${node.countryName} #$displayIndex',
                       style: theme.textTheme.titleSmall?.copyWith(
@@ -105,7 +106,6 @@ class NodeTile extends StatelessWidget {
 
 class _Flag extends StatelessWidget {
   final String iso;
-
   const _Flag({required this.iso});
 
   @override
@@ -121,7 +121,6 @@ class _Flag extends StatelessWidget {
         placeholderBuilder: (context) => Container(
           width: 28, height: 21, color: Colors.grey.shade200,
         ),
-        // SVG 加载失败时的容错处理
       ),
     );
   }
@@ -129,7 +128,6 @@ class _Flag extends StatelessWidget {
 
 class _ProtoBadge extends StatelessWidget {
   final String proto;
-
   const _ProtoBadge({required this.proto});
 
   @override
