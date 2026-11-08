@@ -8,48 +8,40 @@ class VpnService {
   Process? _singBoxProcess;
   static const _groupTag = 'proxy';
 
-  // 直接调用 exe 启动 sing-box，绕过插件的服务模式以触发防火墙提示
   Future<void> applyConfigAndStart(List<VpnNode> nodes, {bool useTun = false}) async {
-    // 1. 生成配置
     final configMap = _buildFullConfigMap(nodes, useTun: useTun);
     final configString = const JsonEncoder.withIndent('  ').convert(configMap);
 
-    // 2. 写入本地
     final exePath = Platform.resolvedExecutable;
     final exeDir = File(exePath).parent.path;
     
     final configFile = File('$exeDir/generated_config.json');
     await configFile.writeAsString(configString);
 
-    // 3. 找到 sing_box.exe 的路径
     final singBoxExePath = '$exeDir/data/flutter_assets/packages/flutter_sing_box/assets/windows/amd64/sing_box.exe';
     if (!File(singBoxExePath).existsSync()) {
       throw Exception('找不到内核文件: $singBoxExePath');
     }
 
-    // 4. 如果之前有进程，先杀掉
     if (_singBoxProcess != null) {
       _singBoxProcess!.kill();
       _singBoxProcess = null;
       await Future.delayed(const Duration(milliseconds: 500));
     }
 
-    // 5. 启动进程
-    debugPrint('正在启动 sing-box: $singBoxExePath');
     _singBoxProcess = await Process.start(
       singBoxExePath,
       ['run', '-c', configFile.path],
       workingDirectory: exeDir,
-      mode: ProcessStartMode.detached, // 独立运行，不阻塞 Dart
+      mode: ProcessStartMode.detached,
     );
 
-    // 等待 29090 端口就绪
     for (int i = 0; i < 10; i++) {
       await Future.delayed(const Duration(milliseconds: 500));
       try {
         await http.get(Uri.parse('http://127.0.0.1:29090')).timeout(const Duration(seconds: 1));
         debugPrint('sing-box 启动成功，29090 端口已就绪');
-        break; // 端口通了，跳出循环
+        break;
       } catch (_) {
         if (i == 9) throw Exception('sing-box 启动超时，端口 29090 无法连接');
       }
@@ -86,12 +78,21 @@ class VpnService {
   }
 
   Map<String, dynamic> _buildFullConfigMap(List<VpnNode> nodes, {required bool useTun}) {
-    final inbound = {
-      'type': 'mixed',
-      'tag': 'mixed-in',
-      'listen': '127.0.0.1',
-      'listen_port': 22890, // 修改端口
-    };
+    final inbound = useTun
+        ? {
+            'type': 'tun',
+            'tag': 'tun-in',
+            'address': ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
+            'auto_route': true,
+            'strict_route': true,
+            'stack': 'mixed',
+          }
+        : {
+            'type': 'mixed',
+            'tag': 'mixed-in',
+            'listen': '127.0.0.1',
+            'listen_port': 22890,
+          };
 
     final outbounds = nodes.map((n) => n.outbound).toList();
     outbounds.add({
@@ -127,7 +128,7 @@ class VpnService {
       },
       'experimental': {
         'clash_api': {
-          'external_controller': '127.0.0.1:29090', // 修改端口
+          'external_controller': '127.0.0.1:29090',
           'default_mode': 'rule',
         },
       },
